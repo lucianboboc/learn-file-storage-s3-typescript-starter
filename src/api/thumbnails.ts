@@ -1,9 +1,11 @@
 import { getBearerToken, validateJWT } from "../auth";
 import { respondWithJSON } from "./json";
-import { getVideo } from "../db/videos";
+import {getVideo, updateVideo} from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
-import { BadRequestError, NotFoundError } from "./errors";
+import {BadRequestError, NotFoundError, UserForbiddenError} from "./errors";
+import * as path from "node:path";
+import {getAssetDiskPath, getAssetURL, mediaTypeExt} from "./assets.ts";
 
 type Thumbnail = {
   data: ArrayBuffer;
@@ -47,7 +49,45 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   console.log("uploading thumbnail for video", videoId, "by user", userID);
 
-  // TODO: implement the upload here
+	const formData = await req.formData();
+	const img = formData.get("thumbnail");
+	if (!(img instanceof File)) {
+		throw new BadRequestError("Invalid file");
+	}
 
-  return respondWithJSON(200, null);
+	const MAX_UPLOAD_SIZE = 10 << 20;
+	if (img.size > MAX_UPLOAD_SIZE) {
+		throw new BadRequestError("File too large");
+	}
+
+	const video = getVideo(cfg.db, videoId);
+	if (!video) {
+		throw new NotFoundError("Couldn't find video");
+	}
+
+	if (video.userID !== userID) {
+		throw new UserForbiddenError("You do not have permission to upload thumbnail");
+	}
+
+	const type = img.type;
+	if (type !== "image/jpeg" && type !== "image/png") {
+		throw new BadRequestError("Invalid file format");
+	}
+
+	const ext = mediaTypeExt(img.type);
+	const arrBuff = await img.arrayBuffer();
+
+	const thumbnailPath = `${videoId}.${ext}`;
+	const writePath = getAssetDiskPath(cfg, thumbnailPath);
+	await Bun.write(writePath, arrBuff);
+
+	videoThumbnails.set(videoId, {
+		data: arrBuff,
+		mediaType: type,
+	});
+
+	video.thumbnailURL = getAssetURL(cfg, thumbnailPath);
+	updateVideo(cfg.db, video);
+
+	return respondWithJSON(200, video);
 }
