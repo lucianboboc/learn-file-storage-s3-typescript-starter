@@ -1,17 +1,17 @@
-import { respondWithJSON } from "./json";
+import {respondWithJSON} from "./json";
 
-import { type ApiConfig } from "../config";
-import type { BunRequest } from "bun";
+import {type ApiConfig} from "../config";
+import type {BunRequest} from "bun";
 import {BadRequestError, NotFoundError, UserForbiddenError} from "./errors.ts";
 import {getBearerToken, validateJWT} from "../auth.ts";
 import {getVideo, updateVideo} from "../db/videos.ts";
 import {randomBytes} from "crypto";
 import * as path from "node:path";
-import { rm } from "node:fs/promises";
+import {rm} from "node:fs/promises";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
 	const UPLOAD_LIMIT = 1 << 30;
-	const {videoId} = req.params as {videoId?: string};
+	const {videoId} = req.params as { videoId?: string };
 	if (!videoId) {
 		console.log("Invalid video ID");
 		throw new BadRequestError("Invalid video ID");
@@ -53,7 +53,8 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
 	await Bun.write(tempPath, videoBuffer);
 	console.log(`Writing video buffer at: ${tempPath}`);
 
-	const key = `${videoName}.mp4`;
+	const aspectRatio = await getVideoAspectRatio(tempPath);
+	const key = `${aspectRatio}/${videoName}.mp4`;
 	const file = Bun.file(tempPath);
 	await cfg.s3Client.write(key, file, {type: "video/mp4"});
 
@@ -61,5 +62,47 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
 	updateVideo(cfg.db, video);
 	await rm(tempPath);
 
-  return respondWithJSON(200, video);
+	return respondWithJSON(200, video);
+}
+
+async function getVideoAspectRatio(filePath: string) {
+	const process = Bun.spawn([
+			"ffprobe",
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=width,height",
+			"-of",
+			"json",
+			filePath,
+		],
+		{
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+
+	const outputText = await new Response(process.stdout).text();
+	const errorText = await new Response(process.stderr).text();
+
+	const exitCode = await process.exited;
+
+	if (exitCode !== 0) {
+		throw new Error(`ffprobe error: ${errorText}`);
+	}
+
+	const output = JSON.parse(outputText);
+	if (!output.streams || output.streams.length === 0) {
+		throw new Error("No video streams found");
+	}
+
+	const {width, height} = output.streams[0];
+
+	return width === Math.floor(16 * (height / 9))
+		? "landscape"
+		: height === Math.floor(16 * (width / 9))
+			? "portrait"
+			: "other";
 }
