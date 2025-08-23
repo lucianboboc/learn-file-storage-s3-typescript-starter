@@ -61,7 +61,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
 	console.log(file.text());
 	await cfg.s3Client.write(key, file, {type: "video/mp4"});
 
-	video.videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`
+	video.videoURL = `https://${cfg.s3CfDistribution}/${key}`
 	updateVideo(cfg.db, video);
 	await rm(tempPath);
 	await rm(processedTempPath);
@@ -140,17 +140,4 @@ async function processVideoForFastStart(inputFilePath: string) {
 	}
 
 	return outputPath;
-}
-
-export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
-	if (!video.videoURL) {
-		return video;
-	}
-
-	video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
-	return video;
-}
-
-async function generatePresignedURL(cfg: ApiConfig, key: string, expireTime: number) {
-	return cfg.s3Client.presign(`${key}`, {expiresIn: expireTime});
 }
